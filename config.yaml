@@ -1,0 +1,42 @@
+# EnergyPulse System Configuration
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  topic: "energy-readings"
+  partitions: 3
+  replication_factor: 1
+
+producer:
+  default_file: "data/household_power_consumption.txt"
+  default_delay_sec: 0.05
+  batch_size: 100
+  buffer_flush_sec: 2.0
+  max_retries: 5
+
+spark:
+  app_name: "EnergyPulse-Streaming-Job"
+  master: "local[*]"
+  package: "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3"
+  window_duration: "1 minute"
+  slide_duration: "1 minute"
+  watermark_delay: "2 minutes"
+  alert_threshold_kw: 5.0
+  trigger_interval_sec: 10
+  output_dir_windowed: "output/windowed"
+  output_dir_alerts: "output/alerts"
+  output_dir_csv: "output/csv"
+  checkpoint_dir: "checkpoints"
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+  ws_broadcast_interval_ms: 100
+  tariff_inr_per_kwh: 7.50
+
+rules:
+  # Deterministic load bands (in kW)
+  load_bands:
+    low: 1.0
+    normal: 3.0
+    high: 5.0
+    critical: 5.0

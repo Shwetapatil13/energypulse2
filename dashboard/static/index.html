@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EnergyPulse — Real-Time Smart Energy Monitor</title>
+    <!-- Modern Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-theme">
+    <div class="app-layout">
+        <!-- Left Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="brand-logo">
+                    <span class="logo-icon">⚡</span>
+                    <div class="brand-text">
+                        <span class="brand-title">EnergyPulse</span>
+                        <span class="brand-subtitle">Smart Energy Monitor</span>
+                    </div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#live" class="nav-item active" data-page="live">
+                    <span class="nav-icon">⚡</span>
+                    <span class="nav-label">Live Monitor</span>
+                </a>
+                <a href="#historical" class="nav-item" data-page="historical">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-label">Historical</span>
+                </a>
+                <a href="#classification" class="nav-item" data-page="classification">
+                    <span class="nav-icon">🏷️</span>
+                    <span class="nav-label">Classification</span>
+                </a>
+                <a href="#forecast" class="nav-item" data-page="forecast">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-label">Forecast</span>
+                </a>
+                <a href="#alerts" class="nav-item" data-page="alerts">
+                    <span class="nav-icon">🚨</span>
+                    <span class="nav-label">Alerts</span>
+                    <span class="badge alert-count-badge" id="sidebar-alert-badge">0</span>
+                </a>
+                <a href="#recommendations" class="nav-item" data-page="recommendations">
+                    <span class="nav-icon">💡</span>
+                    <span class="nav-label">Recommendations</span>
+                </a>
+                <a href="#reports" class="nav-item" data-page="reports">
+                    <span class="nav-icon">📑</span>
+                    <span class="nav-label">Reports</span>
+                </a>
+                <a href="#settings" class="nav-item" data-page="settings">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="connection-status" id="ws-status-container">
+                    <span class="status-dot pulsating"></span>
+                    <span class="status-text" id="ws-status-text">WS Connected</span>
+                </div>
+                <div class="build-meta">TE Comp PICT • DASSS Big Data</div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Universal Top Banner -->
+            <div class="top-simulation-banner">
+                <div class="banner-badge">SIMULATED DATA</div>
+                <div class="banner-text">
+                    Dataset-based simulation — not physical sensor measurements | UCI Household Power Consumption (2006-2010)
+                </div>
+                <div class="live-clock" id="live-clock">--:--:--</div>
+            </div>
+
+            <!-- Page 1: Live Monitor -->
+            <section id="page-live" class="page-section active">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">Live Household Energy Telemetry</h1>
+                        <p class="section-subtitle">Real-time smart meter replay buffered via Apache Kafka and Apache Spark Structured Streaming</p>
+                    </div>
+                    <div class="rate-counter">
+                        <span class="rate-label">Stream Rate</span>
+                        <span class="rate-value" id="live-rate-val">~20 msgs/s</span>
+                    </div>
+                </div>
+
+                <!-- Latest Reading Card Grid -->
+                <div class="metric-grid">
+                    <div class="metric-card highlight-cyan">
+                        <div class="metric-header">
+                            <span class="metric-title">Active Power</span>
+                            <span class="metric-unit">kW</span>
+                        </div>
+                        <div class="metric-value-huge" id="val-gap">--</div>
+                        <div class="metric-footer">
+                            <span class="metric-badge" id="badge-load-class">Low (Standby)</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card highlight-purple">
+                        <div class="metric-header">
+                            <span class="metric-title">Reactive Power</span>
+                            <span class="metric-unit">kVAR</span>
+                        </div>
+                        <div class="metric-value" id="val-grp">--</div>
+                        <div class="metric-footer">Inductive / Power Factor</div>
+                    </div>
+
+                    <div class="metric-card highlight-amber">
+                        <div class="metric-header">
+                            <span class="metric-title">Line Voltage</span>
+                            <span class="metric-unit">Volts</span>
+                        </div>
+                        <div class="metric-value" id="val-volt">--</div>
+                        <div class="metric-footer" id="val-intensity-footer">Current: -- A</div>
+                    </div>
+
+                    <div class="metric-card highlight-emerald">
+                        <div class="metric-header">
+                            <span class="metric-title">Current Cost Rate</span>
+                            <span class="metric-unit">₹ INR / min</span>
+                        </div>
+                        <div class="metric-value" id="val-cost">--</div>
+                        <div class="metric-footer" id="tariff-label">Tariff: ₹7.50 / kWh</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">Energy Consumption</span>
+                            <span class="metric-unit">kWh / min</span>
+                        </div>
+                        <div class="metric-value" id="val-kwh-min">--</div>
+                        <div class="metric-footer" id="val-timestamp">Timestamp: --</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">Sub-Metering Zones</span>
+                            <span class="metric-unit">Watt-hours</span>
+                        </div>
+                        <div class="submeter-bars">
+                            <div class="sub-item">
+                                <span>Kitchen (Z1):</span> <strong id="val-sm1">0.0 Wh</strong>
+                            </div>
+                            <div class="sub-item">
+                                <span>Laundry (Z2):</span> <strong id="val-sm2">0.0 Wh</strong>
+                            </div>
+                            <div class="sub-item">
+                                <span>HVAC/Water (Z3):</span> <strong id="val-sm3">0.0 Wh</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="metric-card" id="anomaly-card">
+                        <div class="metric-header">
+                            <span class="metric-title">Threshold Anomaly</span>
+                            <span class="metric-unit">> 5.0 kW</span>
+                        </div>
+                        <div class="metric-value" id="val-anomaly">No</div>
+                        <div class="metric-footer">Deterministic Rule Check</div>
+                    </div>
+                </div>
+
+                <!-- Live Chart Container -->
+                <div class="glass-card chart-container-card">
+                    <div class="card-header-flex">
+                        <div class="card-title-group">
+                            <h2 class="card-title">Real-Time Active Power Trajectory (kW)</h2>
+                            <span class="card-subtitle">Streaming telemetry window with 50 data points</span>
+                        </div>
+                        <div class="chart-legend-custom">
+                            <span class="legend-indicator cyan"></span> Active Power
+                            <span class="legend-indicator red"></span> Alert Threshold (5.0 kW)
+                        </div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="liveChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Page 2: Historical Analytics -->
+            <section id="page-historical" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">Historical Big Data Analytics</h1>
+                        <p class="section-subtitle">Aggregate metrics & diurnal energy profiles from the complete 47-month UCI dataset</p>
+                    </div>
+                </div>
+
+                <!-- 4 Grand KPIs -->
+                <div class="metric-grid kpi-4-grid">
+                    <div class="metric-card">
+                        <div class="metric-title">Total Smart Meter Readings</div>
+                        <div class="metric-value-huge">2,075,259</div>
+                        <div class="metric-footer">Dec 2006 – Nov 2010 (1-min resolution)</div>
+                    </div>
+                    <div class="metric-card highlight-cyan">
+                        <div class="metric-title">Peak Active Power</div>
+                        <div class="metric-value-huge">11.122 kW</div>
+                        <div class="metric-footer">Household All-Time Peak Demand</div>
+                    </div>
+                    <div class="metric-card highlight-emerald">
+                        <div class="metric-title">Average Active Power</div>
+                        <div class="metric-value-huge">1.091 kW</div>
+                        <div class="metric-footer">Average baseline household load</div>
+                    </div>
+                    <div class="metric-card highlight-purple">
+                        <div class="metric-title">Total Cumulative Energy</div>
+                        <div class="metric-value-huge">~4,628,450 kWh</div>
+                        <div class="metric-footer">Household Total Over 47 Months</div>
+                    </div>
+                </div>
+
+                <!-- Tabs: Hourly, Daily, Heatmap -->
+                <div class="glass-card">
+                    <div class="tabs-header">
+                        <button class="tab-btn active" data-tab="hourly">Hourly Diurnal Trend</button>
+                        <button class="tab-btn" data-tab="daily">Day-of-Week Trend</button>
+                        <button class="tab-btn" data-tab="heatmap">24h × 7d Load Heatmap</button>
+                    </div>
+
+                    <div id="tab-hourly" class="tab-content active">
+                        <div class="chart-wrapper-tall">
+                            <canvas id="hourlyChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div id="tab-daily" class="tab-content">
+                        <div class="chart-wrapper-tall">
+                            <canvas id="dailyChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div id="tab-heatmap" class="tab-content">
+                        <div class="heatmap-legend">
+                            <span>Low (< 0.6 kW)</span>
+                            <div class="gradient-bar"></div>
+                            <span>High (> 2.0 kW)</span>
+                        </div>
+                        <div id="heatmap-grid" class="heatmap-container"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Page 3: Classification -->
+            <section id="page-classification" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">Load Level Classification</h1>
+                        <p class="section-subtitle">Deterministic appliance operating bands categorized by instantaneous active power</p>
+                    </div>
+                    <div class="badge badge-warning">RULE-BASED LOGIC • NOT MACHINE LEARNING</div>
+                </div>
+
+                <div class="cards-deck-4">
+                    <div class="band-card band-low">
+                        <div class="band-header">
+                            <span class="band-tag">Band 1</span>
+                            <h3>Low / Standby</h3>
+                        </div>
+                        <div class="band-range">&lt; 1.0 kW</div>
+                        <p class="band-desc">Standby electronics, routers, idle appliances, sleep mode.</p>
+                        <div class="band-share">58.2% of dataset readings</div>
+                    </div>
+
+                    <div class="band-card band-normal">
+                        <div class="band-header">
+                            <span class="band-tag">Band 2</span>
+                            <h3>Normal Household</h3>
+                        </div>
+                        <div class="band-range">1.0 kW – 3.0 kW</div>
+                        <p class="band-desc">Standard lighting, TV, refrigerator, basic cooking and PC usage.</p>
+                        <div class="band-share">32.4% of dataset readings</div>
+                    </div>
+
+                    <div class="band-card band-high">
+                        <div class="band-header">
+                            <span class="band-tag">Band 3</span>
+                            <h3>High Load</h3>
+                        </div>
+                        <div class="band-range">3.0 kW – 5.0 kW</div>
+                        <p class="band-desc">Washing machines, microwave, air conditioning, dishwashers.</p>
+                        <div class="band-share">7.8% of dataset readings</div>
+                    </div>
+
+                    <div class="band-card band-critical">
+                        <div class="band-header">
+                            <span class="band-tag">Band 4</span>
+                            <h3>Critical / Alert Peak</h3>
+                        </div>
+                        <div class="band-range">&gt; 5.0 kW</div>
+                        <p class="band-desc">Concurrent multi-appliance peaks: electric oven, water heater, AC.</p>
+                        <div class="band-share">1.6% of dataset readings (Alerts)</div>
+                    </div>
+                </div>
+
+                <div class="glass-card mt-4">
+                    <h2 class="card-title">Load Distribution Breakdown</h2>
+                    <div class="chart-wrapper-half">
+                        <canvas id="classificationChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Page 4: Forecast -->
+            <section id="page-forecast" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">Near-Term Demand Forecast</h1>
+                        <p class="section-subtitle">15-minute predictive projection based on rolling exponential moving average</p>
+                    </div>
+                    <div class="badge badge-warning">MOVING AVERAGE TREND • NOT DEEP LEARNING</div>
+                </div>
+
+                <div class="glass-card">
+                    <div class="chart-wrapper-tall">
+                        <canvas id="forecastChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Page 5: Alerts -->
+            <section id="page-alerts" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">High-Power Alert Stream</h1>
+                        <p class="section-subtitle">Events where Global Active Power exceeded the 5.0 kW deterministic threshold</p>
+                    </div>
+                    <button class="btn btn-secondary" id="clear-alerts-btn">Clear View</button>
+                </div>
+
+                <div class="glass-card">
+                    <div class="table-responsive">
+                        <table class="styled-table" id="alerts-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Active Power (kW)</th>
+                                    <th>Voltage (V)</th>
+                                    <th>Current (A)</th>
+                                    <th>Status</th>
+                                    <th>Deterministic Rule</th>
+                                </tr>
+                            </thead>
+                            <tbody id="alerts-tbody">
+                                <tr>
+                                    <td colspan="6" class="text-center">Listening for alert events...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Page 6: Recommendations -->
+            <section id="page-recommendations" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">Energy Optimization Recommendations</h1>
+                        <p class="section-subtitle">Rule-based recommendations based on instantaneous load patterns</p>
+                    </div>
+                </div>
+
+                <div class="recommendations-grid" id="recommendations-container">
+                    <!-- Populated by JS -->
+                </div>
+            </section>
+
+            <!-- Page 7: Reports -->
+            <section id="page-reports" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">Audit Reports & Data Export</h1>
+                        <p class="section-subtitle">Generate CSV export of the analyzed streaming telemetry and alert logs</p>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" id="export-csv-btn">Export Summary CSV</button>
+                        <button class="btn btn-secondary" onclick="window.print()">Print Audit Report</button>
+                    </div>
+                </div>
+
+                <div class="glass-card">
+                    <h2 class="card-title">Telemetry Summary Table</h2>
+                    <div class="table-responsive">
+                        <table class="styled-table" id="reports-table">
+                            <thead>
+                                <tr>
+                                    <th>Metric Category</th>
+                                    <th>Observed Value</th>
+                                    <th>Unit</th>
+                                    <th>Threshold / Baseline</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Dataset Resolution</td><td>1 reading per minute</td><td>min</td><td>Continuous Replay</td></tr>
+                                <tr><td>Historical Peak Power</td><td>11.122</td><td>kW</td><td>Safe Margin: 6.0 kW</td></tr>
+                                <tr><td>Average Power Demand</td><td>1.091</td><td>kW</td><td>Household Baseline</td></tr>
+                                <tr><td>High Power Threshold</td><td>5.000</td><td>kW</td><td>Alert Trigger Band</td></tr>
+                                <tr><td>Electricity Tariff</td><td>₹7.50</td><td>₹ / kWh</td><td>Configurable Rate</td></tr>
+                                <tr><td>Kafka Messaging Protocol</td><td>3 Partitions, JSON</td><td>Kafka Topic</td><td>energy-readings</td></tr>
+                                <tr><td>Spark Streaming Query 1</td><td>1-min Window Aggregation</td><td>PySpark 3.5.3</td><td>output/windowed/</td></tr>
+                                <tr><td>Spark Streaming Query 2</td><td>High Power Alert Filter</td><td>10s Trigger</td><td>output/alerts/</td></tr>
+                                <tr><td>Spark Streaming Query 3</td><td>Raw Stream CSV Sink</td><td>Continuous</td><td>output/csv/</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Page 8: Settings -->
+            <section id="page-settings" class="page-section">
+                <div class="section-header">
+                    <div>
+                        <h1 class="section-title">System Settings & Tariffs</h1>
+                        <p class="section-subtitle">Configure billing tariffs, alert thresholds, and Kafka endpoints</p>
+                    </div>
+                </div>
+
+                <div class="glass-card settings-card">
+                    <form id="settings-form">
+                        <div class="form-group">
+                            <label for="input-tariff">Electricity Tariff (Indian Rupees ₹ per kWh)</label>
+                            <input type="number" step="0.1" id="input-tariff" value="7.50" class="styled-input">
+                            <small>Used to calculate real-time cost per minute.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="input-threshold">High-Power Alert Threshold (kW)</label>
+                            <input type="number" step="0.5" id="input-threshold" value="5.0" class="styled-input">
+                            <small>Instantaneous threshold for deterministic alert trigger.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="input-kafka">Kafka Bootstrap Servers</label>
+                            <input type="text" id="input-kafka" value="localhost:9092" class="styled-input" readonly>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="input-topic">Kafka Ingestion Topic</label>
+                            <input type="text" id="input-topic" value="energy-readings" class="styled-input" readonly>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">Save Settings</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Python Virtual Environment
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Large Datasets
+data/*.txt
+data/*.zip
+!data/.gitkeep
+
+# Streaming Output & Checkpoints
+output/
+checkpoints/
+*.log
+
+# Windows & OS Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
