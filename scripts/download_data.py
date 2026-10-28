@@ -11,6 +11,7 @@ import datetime
 import urllib.request
 import argparse
 
+# Official UCI repository download URLs
 UCI_URL = "https://archive.ics.uci.edu/static/public/235/individual+household+electric+power+consumption.zip"
 MIRROR_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/00235/household_power_consumption.zip"
 
@@ -22,7 +23,12 @@ HEADER = "Date;Time;Global_active_power;Global_reactive_power;Voltage;Global_int
 
 
 def download_uci_dataset(timeout=20):
+    """
+    Downloads and extracts the official 2M+ record UCI dataset from archive.ics.uci.edu.
+    Returns True on success, False if network is blocked or unavailable.
+    """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Check if dataset already downloaded
     if os.path.exists(OUTPUT_FILE) and os.path.getsize(OUTPUT_FILE) > 1024 * 1024:
         print(f"[OK] Dataset already present at: {OUTPUT_FILE} ({os.path.getsize(OUTPUT_FILE):,} bytes)")
         return True
@@ -39,10 +45,12 @@ def download_uci_dataset(timeout=20):
                     print(f"Downloading {int(total_length):,} bytes...")
                 out_file.write(response.read())
 
+            # Extract the zip contents into data/ folder
             print("Extracting ZIP archive...")
             with zipfile.ZipFile(ZIP_FILE, 'r') as zip_ref:
                 zip_ref.extractall(OUTPUT_DIR)
 
+            # Clean up temporary zip file
             if os.path.exists(ZIP_FILE):
                 os.remove(ZIP_FILE)
 
@@ -57,8 +65,8 @@ def download_uci_dataset(timeout=20):
 
 def generate_synthetic_dataset(num_records=100000):
     """
-    Generate realistic synthetic UCI household power consumption dataset matching the exact schema.
-    Used when network access to UCI repository is blocked or unavailable.
+    Generates a realistic synthetic UCI dataset conforming strictly to the exact 9-column schema.
+    Used as an offline fallback when network access to the UCI repository is unavailable.
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"[FALLBACK] Generating realistic synthetic dataset with {num_records:,} records...")
@@ -67,8 +75,6 @@ def generate_synthetic_dataset(num_records=100000):
     start_dt = datetime.datetime(2006, 12, 16, 17, 24, 0)
     current_dt = start_dt
 
-    # Base parameters matching UCI statistics:
-    # Mean active power: ~1.09 kW, Max ~11.122 kW, Voltage: ~240V
     count_missing = 0
     count_alerts = 0
 
@@ -78,25 +84,23 @@ def generate_synthetic_dataset(num_records=100000):
             date_str = current_dt.strftime("%d/%m/%Y")
             time_str = current_dt.strftime("%H:%M:%S")
 
-            # ~1.25% missing data rate as in real UCI dataset
+            # ~1.25% missing data rate matching the real UCI dataset
             if random.random() < 0.0125:
                 f.write(f"{date_str};{time_str};?;?;?;?;?;?;?\n")
                 count_missing += 1
                 current_dt += datetime.timedelta(minutes=1)
                 continue
 
-            # Time of day behavior
+            # Diurnal load curve: higher consumption in morning & evening peak hours
             hour = current_dt.hour
             is_peak_hour = (7 <= hour <= 9) or (18 <= hour <= 22)
             
-            # Base active power (kW)
             if is_peak_hour:
                 base_power = random.uniform(1.2, 4.2)
             else:
                 base_power = random.uniform(0.18, 1.1)
 
-            # High power alert event simulation (> 5.0 kW, e.g. oven, heater, water heater)
-            # Roughly 0.8% of records exceed 5.0 kW
+            # High power alert event simulation (> 5.0 kW threshold)
             if random.random() < 0.008 or (i % 250 == 120):
                 active_power = round(random.uniform(5.1, 9.8), 3)
                 count_alerts += 1
@@ -107,10 +111,7 @@ def generate_synthetic_dataset(num_records=100000):
             voltage = round(random.gauss(240.8, 3.2), 2)
             intensity = round((active_power * 1000.0) / voltage, 1)
 
-            # Sub metering in watt-hours per minute
-            # Sub 1: kitchen (dishwasher, microwave)
-            # Sub 2: laundry (washing machine, tumble dryer)
-            # Sub 3: climate (electric water heater, AC)
+            # Sub-metering circuits (Zone 1 Kitchen, Zone 2 Laundry, Zone 3 HVAC)
             sub1 = round(random.choice([0.0, 0.0, 0.0, 1.0, 18.0, 25.0]) if active_power > 2.0 else 0.0, 1)
             sub2 = round(random.choice([0.0, 0.0, 1.0, 2.0, 36.0]) if active_power > 2.5 else 0.0, 1)
             sub3 = round(random.uniform(1.0, 18.0) if active_power > 1.0 else 0.0, 1)

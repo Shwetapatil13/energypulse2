@@ -17,16 +17,20 @@ import yaml
 import argparse
 from pathlib import Path
 
-# Ensure Windows HADOOP_HOME and winutils environment is configured
+# -----------------------------------------------------------------------------
+# Windows Environment Setup (HADOOP_HOME & Winutils)
+# -----------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WINUTILS_DIR = PROJECT_ROOT / "tools" / "winutils"
 
+# On Windows, Apache Spark requires winutils.exe for local file operations
 if os.name == "nt":
     if WINUTILS_DIR.exists():
         os.environ["HADOOP_HOME"] = str(WINUTILS_DIR)
         hadoop_bin = str(WINUTILS_DIR / "bin")
         if hadoop_bin not in os.environ.get("PATH", ""):
             os.environ["PATH"] = hadoop_bin + os.pathsep + os.environ.get("PATH", "")
+    # Add Spark SQL Kafka connector package dependency
     os.environ["PYSPARK_SUBMIT_ARGS"] = (
         "--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 "
         "pyspark-shell"
@@ -34,7 +38,7 @@ if os.name == "nt":
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    from_json, col, to_timestamp, window, avg, max, count, round, when
+    from_json, col, to_timestamp, window, avg, max, count, round
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, DoubleType
@@ -42,6 +46,7 @@ from pyspark.sql.types import (
 
 
 def load_config():
+    """Loads configuration values from config.yaml with fallback defaults."""
     config_path = PROJECT_ROOT / "config.yaml"
     config = {
         "kafka": {
@@ -78,14 +83,18 @@ def load_config():
 
 
 def create_spark_session(app_name: str, master: str) -> SparkSession:
-    """Initializes SparkSession with Kafka package and Java 21 compatibility."""
+    """
+    Initializes SparkSession with Kafka package and Java 21 compatibility flags.
+    """
     builder = (
         SparkSession.builder
         .appName(app_name)
         .master(master)
+        # Kafka connector dependency
         .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3")
         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
         .config("spark.sql.shuffle.partitions", "3")
+        # Java 17/21 module access permissions required by Apache Spark
         .config("spark.driver.extraJavaOptions", (
             "-Djava.security.manager=allow "
             "--add-opens=java.base/java.lang=ALL-UNNAMED "
@@ -104,11 +113,12 @@ def create_spark_session(app_name: str, master: str) -> SparkSession:
         ))
     )
     spark = builder.getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
+    spark.sparkContext.setLogLevel("WARN")  # Reduce noisy log output
     return spark
 
 
 def main():
+    # Parse CLI parameters
     parser = argparse.ArgumentParser(description="PySpark Structured Streaming Job for Energy Telemetry")
     parser.add_argument("--bootstrap-servers", type=str, default=None, help="Kafka bootstrap servers")
     parser.add_argument("--topic", type=str, default=None, help="Kafka topic to consume from")
@@ -124,7 +134,7 @@ def main():
     watermark_delay = config["spark"]["watermark_delay"]
     trigger_sec = int(config["spark"]["trigger_interval_sec"])
 
-    # Output and Checkpoint directories
+    # Prepare output and checkpoint directory paths
     out_windowed = Path(config["spark"]["output_dir_windowed"])
     out_alerts = Path(config["spark"]["output_dir_alerts"])
     out_csv = Path(config["spark"]["output_dir_csv"])
@@ -143,6 +153,7 @@ def main():
     print(f" Checkpoint Root : {checkpoint_base}")
     print("================================================================================")
 
+    # Initialize Spark Session
     spark = create_spark_session(config["spark"]["app_name"], config["spark"]["master"])
 
     # Define explicit JSON schema for incoming energy readings
@@ -159,7 +170,9 @@ def main():
         StructField("Sub_metering_3", DoubleType(), True),
     ])
 
-    # Read stream from Apache Kafka
+    # -------------------------------------------------------------------------
+    # STEP 1: Ingest Stream from Apache Kafka
+    # -------------------------------------------------------------------------
     raw_stream = (
         spark.readStream
         .format("kafka")
@@ -170,13 +183,14 @@ def main():
         .load()
     )
 
-    # Parse JSON payload and cast timestamp to event-time
+    # Parse JSON string from Kafka value column into structured columns
     parsed_stream = (
         raw_stream
         .selectExpr("CAST(value AS STRING) as json_payload")
         .select(from_json(col("json_payload"), reading_schema).alias("data"))
         .select("data.*")
         .filter(col("timestamp").isNotNull())
+        # Convert string ISO timestamp to Spark TimestampType for windowing
         .withColumn("event_time", to_timestamp(col("timestamp"), "yyyy-MM-dd'T'HH:mm:ss"))
         .filter(col("event_time").isNotNull())
     )
@@ -187,7 +201,9 @@ def main():
     # -------------------------------------------------------------------------
     windowed_df = (
         parsed_stream
+        # 2-minute watermark bounds late-arriving events
         .withWatermark("event_time", watermark_delay)
+        # Tumbling/sliding event-time window grouping
         .groupBy(window(col("event_time"), window_duration, slide_duration))
         .agg(
             avg("Global_active_power").alias("avg_active_power"),
@@ -204,12 +220,11 @@ def main():
     )
 
     def write_windowed_batch(batch_df, batch_id):
+        """Micro-batch handler: logs window metrics and appends to CSV."""
         if not batch_df.isEmpty():
             print(f"\n[WINDOWED AGGREGATION BATCH {batch_id}]")
             batch_df.show(5, truncate=False)
-            # Write to CSV in output/windowed/
             csv_path = str(out_windowed / "aggregated_windows.csv")
-            # Convert to Pandas for reliable single append file write on Windows
             pdf = batch_df.toPandas()
             file_exists = os.path.exists(csv_path)
             pdf.to_csv(csv_path, mode="a", header=not file_exists, index=False)
@@ -230,6 +245,7 @@ def main():
     # -------------------------------------------------------------------------
     alerts_df = (
         parsed_stream
+        # Deterministic condition checking if instantaneous demand exceeds 5.0 kW
         .filter(col("Global_active_power") > threshold_kw)
         .select(
             col("timestamp"),
@@ -244,6 +260,7 @@ def main():
     )
 
     def write_alerts_batch(batch_df, batch_id):
+        """Micro-batch handler: prints formatted alert lines to PowerShell and appends to CSV."""
         if not batch_df.isEmpty():
             pdf = batch_df.toPandas()
             for _, row in pdf.iterrows():
@@ -260,7 +277,7 @@ def main():
         alerts_df.writeStream
         .queryName("high_power_alerts")
         .outputMode("append")
-        .trigger(processingTime=f"{trigger_sec} seconds")
+        .trigger(processingTime=f"{trigger_sec} seconds")  # 10s micro-batch interval
         .foreachBatch(write_alerts_batch)
         .option("checkpointLocation", str(checkpoint_base / "alerts"))
         .start()
@@ -271,6 +288,7 @@ def main():
     # Sinks incoming validated telemetry to output/csv/
     # -------------------------------------------------------------------------
     def write_csv_batch(batch_df, batch_id):
+        """Appends validated stream records to continuous CSV."""
         if not batch_df.isEmpty():
             csv_path = str(out_csv / "stream_readings.csv")
             pdf = batch_df.drop("event_time").toPandas()
@@ -286,6 +304,9 @@ def main():
         .start()
     )
 
+    # -------------------------------------------------------------------------
+    # Summary of Active Queries & Await Termination
+    # -------------------------------------------------------------------------
     print("\n[ACTIVE STREAMING QUERIES]")
     for q in spark.streams.active:
         print(f"  - Query Name: {q.name} | ID: {q.id} | Status: Active")

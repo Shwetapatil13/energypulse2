@@ -12,13 +12,14 @@ import signal
 import argparse
 from typing import Optional
 
-# Ensure project root is in sys.path
+# Ensure project root is in sys.path so imports work from any working directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from producer.parser import parse_row
 
+# Import Kafka producer safely; handle missing dependency gracefully
 try:
     from kafka import KafkaProducer
     from kafka.errors import NoBrokersAvailable, KafkaError
@@ -29,27 +30,33 @@ except ImportError:
 
 
 class TelemetryProducer:
+    """
+    Manages connection to Apache Kafka and streams telemetry records line-by-line.
+    """
     def __init__(self, bootstrap_servers: str = "localhost:9092", topic: str = "energy-readings"):
-        self.bootstrap_servers = bootstrap_servers
-        self.topic = topic
+        self.bootstrap_servers = bootstrap_servers  # Kafka broker address
+        self.topic = topic                          # Target Kafka topic name
         self.producer: Optional[KafkaProducer] = None
-        self.running = True
+        self.running = True                         # Flag to control graceful loop exit
 
     def connect(self, max_retries: int = 5, retry_delay: float = 3.0) -> bool:
-        """Connects to Kafka with retries."""
+        """
+        Attempts to connect to Kafka with automatic retries if broker is still starting.
+        """
         if KafkaProducer is None:
-            print("[ERROR] kafka-python-ng is not installed. Please run: pip install -r requirements.txt")
+            print("[ERROR] kafka-python-ng is not installed. Run: pip install -r requirements.txt")
             return False
 
         for attempt in range(1, max_retries + 1):
             try:
+                # Initialize Kafka producer with JSON serializer and acknowledged writes
                 self.producer = KafkaProducer(
                     bootstrap_servers=self.bootstrap_servers,
-                    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-                    acks="all",
-                    retries=3,
-                    linger_ms=10,
-                    batch_size=16384
+                    value_serializer=lambda v: json.dumps(v).encode("utf-8"),  # Convert dict to JSON bytes
+                    acks="all",         # Wait for leader + replica acknowledgment
+                    retries=3,          # Retry failed message sends
+                    linger_ms=10,       # Group messages up to 10ms for throughput
+                    batch_size=16384    # 16 KB batch size
                 )
                 print(f"Connected to Kafka at {self.bootstrap_servers}")
                 return True
@@ -63,7 +70,11 @@ class TelemetryProducer:
         return False
 
     def replay(self, file_path: str, delay: float = 0.05, limit: Optional[int] = None):
-        """Streams records sequentially from CSV into Kafka."""
+        """
+        Reads CSV file sequentially and publishes each parsed row to Kafka.
+        - delay: pause between records (0.05s = ~20 messages/sec)
+        - limit: stop after sending this many records (None = stream all)
+        """
         if not os.path.exists(file_path):
             print(f"[ERROR] Data file not found: {file_path}")
             print("Please run 'python scripts/download_data.py' or 'scripts/download_data.ps1' first.")
@@ -78,22 +89,24 @@ class TelemetryProducer:
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                header = f.readline()  # Skip CSV header
+                header = f.readline()  # Skip CSV header line
 
                 for line in f:
                     if not self.running:
                         break
 
+                    # Parse row into numerical dictionary
                     record, is_skipped = parse_row(line)
                     if is_skipped:
                         total_skipped += 1
                         continue
 
-                    # Send to Kafka
+                    # Publish JSON message to Kafka topic
                     if self.producer:
                         self.producer.send(self.topic, value=record)
                     total_sent += 1
 
+                    # Print formatted status update every 1 second or at completion
                     now = time.time()
                     elapsed = now - last_stat_time
                     if elapsed >= 1.0 or (limit and total_sent >= limit):
@@ -105,9 +118,11 @@ class TelemetryProducer:
                         last_stat_time = now
                         last_stat_sent = total_sent
 
+                    # Check limit condition (e.g. 2000 records for smoke test)
                     if limit and total_sent >= limit:
                         break
 
+                    # Sleep to emulate live smart-meter streaming rate
                     if delay > 0:
                         time.sleep(delay)
 
@@ -117,6 +132,7 @@ class TelemetryProducer:
             self.stop(total_sent, total_skipped, start_time)
 
     def stop(self, total_sent: int = 0, total_skipped: int = 0, start_time: float = 0.0):
+        """Flushes buffered messages and closes the Kafka connection."""
         self.running = False
         if self.producer:
             print("[INFO] Flushing outstanding messages to Kafka...")
@@ -129,6 +145,7 @@ class TelemetryProducer:
 
 
 def main():
+    # Parse command line arguments
     parser = argparse.ArgumentParser(description="Replay UCI Household Power Consumption dataset into Kafka.")
     parser.add_argument("--file", type=str, default="data/household_power_consumption.txt", help="Path to UCI CSV dataset")
     parser.add_argument("--delay", type=float, default=0.05, help="Delay per record in seconds (default 0.05s = ~20 msgs/sec)")
@@ -140,12 +157,14 @@ def main():
 
     producer = TelemetryProducer(bootstrap_servers=args.bootstrap_servers, topic=args.topic)
 
+    # Register signal handlers for clean Ctrl+C termination
     def signal_handler(sig, frame):
         producer.running = False
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    # Connect and begin replay loop
     connected = producer.connect()
     if not connected:
         sys.exit(1)

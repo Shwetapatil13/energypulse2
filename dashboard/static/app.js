@@ -1,28 +1,31 @@
 /**
  * EnergyPulse Frontend Application Logic
  * DASSS Big Data Case Study - PICT Pune
+ * 
+ * Manages WebSocket real-time communication, metric updates, Chart.js graphs,
+ * and page navigation across the dark-themed single-page application.
  */
 
 document.addEventListener("DOMContentLoaded", () => {
     // -------------------------------------------------------------
-    // Application State
+    // 1. Application State Variables
     // -------------------------------------------------------------
     const state = {
-        ws: null,
-        reconnectAttempts: 0,
-        maxChartPoints: 40,
-        liveLabels: [],
-        liveDataPoints: [],
-        thresholdPoints: [],
-        alerts: [],
-        tariff: 7.50,
-        threshold: 5.0,
-        historicalData: null,
-        classificationData: null
+        ws: null,                   // WebSocket client instance
+        reconnectAttempts: 0,       // Counter for auto-reconnect backoff
+        maxChartPoints: 40,         // Sliding window size for real-time chart
+        liveLabels: [],             // Time labels on chart x-axis
+        liveDataPoints: [],         // Active power values on chart y-axis
+        thresholdPoints: [],        // Red reference line at 5.0 kW
+        alerts: [],                 // List of high-power alerts
+        tariff: 7.50,               // Current tariff in ₹ per kWh
+        threshold: 5.0,             // Current alert threshold in kW
+        historicalData: null,       // Cached historical analytics payload
+        classificationData: null    // Cached load classification payload
     };
 
     // -------------------------------------------------------------
-    // DOM Elements
+    // 2. DOM Elements Cache
     // -------------------------------------------------------------
     const el = {
         navItems: document.querySelectorAll(".nav-item"),
@@ -34,7 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
         liveClock: document.getElementById("live-clock"),
         sidebarAlertBadge: document.getElementById("sidebar-alert-badge"),
 
-        // Metric values
+        // Metric Card Values
         valGap: document.getElementById("val-gap"),
         valGrp: document.getElementById("val-grp"),
         valVolt: document.getElementById("val-volt"),
@@ -62,7 +65,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     // -------------------------------------------------------------
-    // Real-Time Clock
+    // 3. Live System Clock
     // -------------------------------------------------------------
     function updateClock() {
         const now = new Date();
@@ -72,9 +75,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updateClock();
 
     // -------------------------------------------------------------
-    // Page Routing
+    // 4. Sidebar Page Switching (Single-Page App Navigation)
     // -------------------------------------------------------------
     function switchPage(pageId) {
+        // Update active navigation link in sidebar
         el.navItems.forEach(item => {
             if (item.getAttribute("data-page") === pageId) {
                 item.classList.add("active");
@@ -83,6 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
+        // Show selected section, hide other sections
         el.pageSections.forEach(section => {
             if (section.id === `page-${pageId}`) {
                 section.classList.add("active");
@@ -91,7 +96,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
-        // Trigger chart resizes if switching to chart pages
+        // Lazily fetch data or render charts when user navigates to a tab
         if (pageId === "historical" && state.historicalData) {
             renderHistoricalCharts();
         } else if (pageId === "classification" && state.classificationData) {
@@ -110,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // -------------------------------------------------------------
-    // Historical Tabs
+    // 5. Historical Sub-Tabs (Hourly, Daily, Heatmap)
     // -------------------------------------------------------------
     el.tabButtons.forEach(btn => {
         btn.addEventListener("click", () => {
@@ -123,12 +128,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // -------------------------------------------------------------
-    // Chart.js Setup
+    // 6. Chart.js Setup: Real-Time Active Power Chart
     // -------------------------------------------------------------
     Chart.defaults.color = "#9ca3af";
     Chart.defaults.font.family = "'Outfit', sans-serif";
 
-    // 1. Live Active Power Chart
     const liveCtx = document.getElementById("liveChart").getContext("2d");
     const liveGradient = liveCtx.createLinearGradient(0, 0, 0, 300);
     liveGradient.addColorStop(0, "rgba(6, 182, 212, 0.45)");
@@ -184,7 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // -------------------------------------------------------------
-    // WebSocket Client
+    // 7. WebSocket Client with Auto-Reconnect
     // -------------------------------------------------------------
     function connectWebSocket() {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -208,9 +212,11 @@ document.addEventListener("DOMContentLoaded", () => {
         state.ws.onmessage = (event) => {
             try {
                 const msg = JSON.parse(event.data);
+                // Handle live telemetry packet
                 if (msg.type === "telemetry" && msg.data) {
                     handleTelemetry(msg.data);
                 } else if (msg.type === "init") {
+                    // Handle initial state packet upon connecting
                     if (msg.tariff) state.tariff = msg.tariff;
                     if (msg.threshold) state.threshold = msg.threshold;
                     if (msg.readings) {
@@ -227,6 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         state.ws.onclose = () => {
+            // Reconnect automatically if connection drops
             el.wsStatusText.textContent = "Disconnected";
             dot.style.backgroundColor = "#ef4444";
             dot.style.boxShadow = "0 0 10px #ef4444";
@@ -242,7 +249,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Telemetry Update Handler
+    // 8. Telemetry Metric Update Handler
     // -------------------------------------------------------------
     function handleTelemetry(reading, updateChartNow = true) {
         const gap = Number(reading.Global_active_power || 0);
@@ -254,7 +261,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const timestamp = reading.timestamp || reading.Time || "--";
         const isAlert = gap > state.threshold;
 
-        // Update DOM Metric Cards
+        // Update card values in DOM
         el.valGap.textContent = gap.toFixed(3);
         el.valGrp.textContent = grp.toFixed(3);
         el.valVolt.textContent = volt.toFixed(1);
@@ -267,11 +274,11 @@ document.addEventListener("DOMContentLoaded", () => {
         el.valSm2.textContent = `${Number(reading.Sub_metering_2 || 0).toFixed(1)} Wh`;
         el.valSm3.textContent = `${Number(reading.Sub_metering_3 || 0).toFixed(1)} Wh`;
 
-        // Load Classification Badge
+        // Update load classification badge
         const loadClass = reading.load_class || (gap < 1 ? "Low (Standby)" : gap <= 3 ? "Normal" : gap <= 5 ? "High" : "Critical");
         el.badgeLoadClass.textContent = loadClass;
 
-        // Anomaly Card Status
+        // Anomaly highlight if power > 5.0 kW
         if (isAlert) {
             el.valAnomaly.textContent = "YES (ALERT)";
             el.valAnomaly.style.color = "#ef4444";
@@ -285,12 +292,13 @@ document.addEventListener("DOMContentLoaded", () => {
             el.anomalyCard.style.boxShadow = "none";
         }
 
-        // Live Chart Data Push
+        // Push new point into chart sliding window
         const timeLabel = timestamp.includes("T") ? timestamp.split("T")[1].substring(0, 8) : timestamp;
         state.liveLabels.push(timeLabel);
         state.liveDataPoints.push(gap);
         state.thresholdPoints.push(state.threshold);
 
+        // Keep at most maxChartPoints on screen
         if (state.liveLabels.length > state.maxChartPoints) {
             state.liveLabels.shift();
             state.liveDataPoints.shift();
@@ -303,10 +311,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Alerts Manager
+    // 9. Alert List Manager
     // -------------------------------------------------------------
     function recordAlert(alertItem) {
-        // Prevent duplicate consecutive alerts
+        // Avoid duplicate alerts for the same timestamp
         if (state.alerts.length > 0 && state.alerts[0].timestamp === alertItem.timestamp) {
             return;
         }
@@ -316,7 +324,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         el.sidebarAlertBadge.textContent = state.alerts.length;
 
-        // Render Alerts Table
+        // Prepend new alert row into the Alerts table
         if (el.alertsTbody) {
             if (state.alerts.length === 1) el.alertsTbody.innerHTML = "";
 
@@ -349,7 +357,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Historical Big Data Fetch & Visualisation
+    // 10. Historical Analytics Charts & 24x7 Heatmap
     // -------------------------------------------------------------
     let hourlyChartInstance = null;
     let dailyChartInstance = null;
@@ -367,7 +375,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderHistoricalCharts() {
         if (!state.historicalData) return;
 
-        // 1. Hourly Chart
+        // 1. Hourly Bar Chart (24 Hours)
         const hourlyCtx = document.getElementById("hourlyChart");
         if (hourlyCtx) {
             if (hourlyChartInstance) hourlyChartInstance.destroy();
@@ -398,7 +406,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }
 
-        // 2. Daily Chart
+        // 2. Day of Week Line Chart (7 Days)
         const dailyCtx = document.getElementById("dailyChart");
         if (dailyCtx) {
             if (dailyChartInstance) dailyChartInstance.destroy();
@@ -430,10 +438,9 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }
 
-        // 3. Heatmap
+        // 3. 24h x 7d Matrix Heatmap
         if (el.heatmapGrid && state.historicalData.heatmap) {
             el.heatmapGrid.innerHTML = "";
-            // Header row with hour markers
             const emptyCorner = document.createElement("div");
             emptyCorner.className = "heatmap-label";
             emptyCorner.textContent = "Day / Hr";
@@ -447,9 +454,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 el.heatmapGrid.appendChild(hourHeader);
             }
 
-            // Group by days
             const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-            days.forEach((day, dIdx) => {
+            days.forEach((day) => {
                 const dayLabel = document.createElement("div");
                 dayLabel.className = "heatmap-label";
                 dayLabel.textContent = day.substring(0, 3);
@@ -464,7 +470,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     div.textContent = cell.avg_kw.toFixed(1);
                     div.title = `${day} at ${cell.hour}:00 - Avg ${cell.avg_kw} kW`;
 
-                    // Color gradient based on power
+                    // Dynamic color gradient based on power consumption
                     const p = Math.min(1.0, Math.max(0.0, (cell.avg_kw - 0.3) / 1.5));
                     if (p < 0.25) {
                         div.style.backgroundColor = "#1e293b";
@@ -483,7 +489,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Classification Chart
+    // 11. Load Level Classification Doughnut Chart
     // -------------------------------------------------------------
     let classificationChartInstance = null;
     async function fetchClassificationData() {
@@ -523,7 +529,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Forecast Chart
+    // 12. Near-Term Moving Average Forecast Chart
     // -------------------------------------------------------------
     let forecastChartInstance = null;
     async function fetchForecastData() {
@@ -587,7 +593,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Recommendations Fetch
+    // 13. Context-Aware Energy Saving Recommendations
     // -------------------------------------------------------------
     async function fetchRecommendations() {
         try {
@@ -610,7 +616,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // Settings Form Handler
+    // 14. Settings Form (Tariff & Threshold Configuration)
     // -------------------------------------------------------------
     if (el.settingsForm) {
         el.settingsForm.addEventListener("submit", async (e) => {
@@ -635,7 +641,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // CSV Export Handler
+    // 15. CSV Export Handler
     // -------------------------------------------------------------
     if (el.exportCsvBtn) {
         el.exportCsvBtn.addEventListener("click", () => {
@@ -655,7 +661,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // App Initialization
+    // 16. App Bootstrapping
     // -------------------------------------------------------------
     connectWebSocket();
     fetchHistoricalData();

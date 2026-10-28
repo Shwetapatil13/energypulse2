@@ -26,8 +26,10 @@ STATIC_DIR = PROJECT_ROOT / "dashboard" / "static"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 DATA_FILE = PROJECT_ROOT / "data" / "household_power_consumption.txt"
 
+# Initialize FastAPI application
 app = FastAPI(title="EnergyPulse - Smart Energy Monitor", version="1.0.0")
 
+# Enable Cross-Origin Resource Sharing (CORS) for local frontend communication
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,6 +40,7 @@ app.add_middleware(
 
 
 def load_config() -> Dict[str, Any]:
+    """Reads system configuration settings from config.yaml."""
     config_path = PROJECT_ROOT / "config.yaml"
     cfg = {
         "kafka": {"bootstrap_servers": "localhost:9092", "topic": "energy-readings"},
@@ -58,24 +61,30 @@ def load_config() -> Dict[str, Any]:
 
 
 CONFIG = load_config()
-TARIFF_INR = float(CONFIG["dashboard"].get("tariff_inr_per_kwh", 7.50))
-ALERT_THRESHOLD_KW = float(CONFIG["spark"].get("alert_threshold_kw", 5.0))
+TARIFF_INR = float(CONFIG["dashboard"].get("tariff_inr_per_kwh", 7.50))      # Default: ₹7.50 per kWh
+ALERT_THRESHOLD_KW = float(CONFIG["spark"].get("alert_threshold_kw", 5.0))  # Default: 5.0 kW threshold
 
 
-# Connection Manager for WebSockets
+# -----------------------------------------------------------------------------
+# WebSocket Connection Manager
+# -----------------------------------------------------------------------------
 class ConnectionManager:
+    """Manages active browser WebSocket connections and broadcasts telemetry."""
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
+        """Accepts and stores incoming WebSocket connection from client browser."""
         await websocket.accept()
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
+        """Removes disconnected WebSocket client."""
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
+        """Pushes JSON telemetry payload to all currently connected browsers."""
         dead_connections = []
         for connection in self.active_connections:
             try:
@@ -88,15 +97,20 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-
-# State Buffers
+# In-memory sliding history buffers
 recent_readings: List[Dict[str, Any]] = []
 recent_alerts: List[Dict[str, Any]] = []
 windowed_analytics: List[Dict[str, Any]] = []
 
 
 def classify_load(power_kw: float) -> str:
-    """Deterministic rule-based load classification (NOT ML)."""
+    """
+    Deterministic rule-based load classification bands (NOT Machine Learning).
+    - < 1.0 kW: Standby / Base load
+    - 1.0 - 3.0 kW: Normal household usage
+    - 3.0 - 5.0 kW: High load (washing machine, AC, oven)
+    - > 5.0 kW: Critical peak demand (Alert threshold)
+    """
     if power_kw < 1.0:
         return "Low (Standby)"
     elif power_kw <= 3.0:
@@ -108,8 +122,13 @@ def classify_load(power_kw: float) -> str:
 
 
 def enrich_reading(reading: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculates derived real-time metrics:
+    - Energy in kWh for a 1-minute reading: kW * (1/60 hr)
+    - Cost per minute in Indian Rupees (₹): Energy * Tariff
+    - Anomaly check against 5.0 kW threshold
+    """
     gap = float(reading.get("Global_active_power", 0.0))
-    # Energy in kWh for a 1-minute reading = kW * (1/60 hr)
     energy_kwh = gap / 60.0
     cost_inr = energy_kwh * TARIFF_INR
     is_anomaly = gap > ALERT_THRESHOLD_KW
@@ -126,15 +145,17 @@ def enrich_reading(reading: Dict[str, Any]) -> Dict[str, Any]:
     return enriched
 
 
-# Background Telemetry Streamer
+# -----------------------------------------------------------------------------
+# Background Telemetry Streamer Task
+# -----------------------------------------------------------------------------
 async def telemetry_streamer():
     """
-    Background worker that monitors Kafka or files, or replays telemetry to WebSockets.
+    Background worker that replays telemetry buffer to all connected WebSockets
+    every 300ms, emulating a live IoT smart meter feed.
     """
-    file_pointer = 0
     buffer = []
 
-    # Preload sample lines from dataset if available
+    # Preload sample historical lines from dataset file
     if DATA_FILE.exists():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -150,7 +171,7 @@ async def telemetry_streamer():
         except Exception as e:
             print(f"[WARN] Error reading dataset buffer: {e}")
 
-    # Fallback synthetic buffer if empty
+    # Fallback synthetic buffer if dataset not present yet
     if not buffer:
         dt = datetime(2006, 12, 16, 17, 24, 0)
         for i in range(500):
@@ -174,27 +195,22 @@ async def telemetry_streamer():
     idx = 0
     while True:
         try:
-            # Check for live Spark alerts file
-            alerts_file = OUTPUT_DIR / "alerts" / "high_power_alerts.csv"
-            if alerts_file.exists():
-                # Read latest alerts if updated
-                pass
-
             raw_item = buffer[idx % len(buffer)]
             item = enrich_reading(raw_item)
             idx += 1
 
-            # Update buffers
+            # Keep sliding window of latest 100 readings
             recent_readings.append(item)
             if len(recent_readings) > 100:
                 recent_readings.pop(0)
 
+            # Record alerts for readings exceeding 5.0 kW
             if item["is_alert"]:
                 recent_alerts.insert(0, item)
                 if len(recent_alerts) > 50:
                     recent_alerts.pop()
 
-            # Broadcast message
+            # Broadcast live telemetry packet to frontend
             payload = {
                 "type": "telemetry",
                 "data": item,
@@ -203,24 +219,27 @@ async def telemetry_streamer():
                 "server_time": datetime.now().isoformat()
             }
             await manager.broadcast(payload)
-        except Exception as e:
-            # Prevent loop termination on transient error
+        except Exception:
             pass
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.3)  # Broadcast rate: ~3 updates/second
 
 
 @app.on_event("startup")
 async def startup_event():
+    """Starts the background telemetry broadcaster upon server boot."""
     asyncio.create_task(telemetry_streamer())
 
 
-# WebSocket Endpoint
+# -----------------------------------------------------------------------------
+# WebSocket Route
+# -----------------------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint connecting browser client to real-time telemetry stream."""
     await manager.connect(websocket)
-    # Send initial state snapshot
     try:
+        # Send initial snapshot upon connection
         await websocket.send_json({
             "type": "init",
             "readings": recent_readings[-30:],
@@ -229,20 +248,20 @@ async def websocket_endpoint(websocket: WebSocket):
             "threshold": ALERT_THRESHOLD_KW
         })
         while True:
-            # Keep-alive receive
-            data = await websocket.receive_text()
+            # Keep connection alive
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:
         manager.disconnect(websocket)
 
 
-# REST APIs
+# -----------------------------------------------------------------------------
+# REST Endpoints
+# -----------------------------------------------------------------------------
 @app.get("/api/stats")
 async def get_stats():
-    """
-    Returns accurate aggregate baseline metrics from the full 2,075,259 UCI dataset.
-    """
+    """Returns grand summary baseline metrics computed from the 2,075,259 UCI records."""
     return {
         "dataset_name": "UCI Individual Household Electric Power Consumption",
         "household_location": "Sète, France",
@@ -262,19 +281,19 @@ async def get_stats():
 
 @app.get("/api/historical")
 async def get_historical():
-    """Returns 24h diurnal curve, day of week averages, and hour x weekday heatmap matrix."""
-    # 24-hour hourly profile matching UCI household trends (morning and evening spikes)
+    """Returns 24h diurnal load curve, day-of-week averages, and 24x7 heatmap matrix."""
+    # 24-hour diurnal curve matching household daily routines
     hourly = [
         {"hour": h, "avg_kw": round(0.48 + 0.3 * (1.0 if (7 <= h <= 9 or 18 <= h <= 22) else 0.2) + 0.15 * (h % 3) * 0.1, 3)}
         for h in range(24)
     ]
-    # Day of week (Monday to Sunday)
+    # Day-of-week consumption (higher on weekends)
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     daily = [
         {"day": d, "avg_kw": round(1.02 + (0.25 if d in ("Saturday", "Sunday") else 0.05), 3)}
         for d in days
     ]
-    # Heatmap 24 x 7
+    # Heatmap matrix: 24 hours x 7 days
     heatmap = []
     for d_idx, day in enumerate(days):
         for h in range(24):
@@ -286,7 +305,7 @@ async def get_historical():
 
 @app.get("/api/classification")
 async def get_classification():
-    """Rule-based load bands breakdown."""
+    """Returns deterministic load bands breakdown."""
     return {
         "type": "Rule-Based Deterministic Bands (NOT Machine Learning)",
         "bands": [
@@ -300,8 +319,7 @@ async def get_classification():
 
 @app.get("/api/forecast")
 async def get_forecast():
-    """Rule-based moving average and simple trend projection (NOT deep learning)."""
-    # Generate 15-minute future projection based on moving average
+    """Returns 15-minute predictive projection based on rolling moving average."""
     base_kw = recent_readings[-1]["Global_active_power"] if recent_readings else 1.85
     forecast_points = []
     now = datetime.now()
@@ -324,7 +342,7 @@ async def get_forecast():
 
 @app.get("/api/recommendations")
 async def get_recommendations():
-    """Context-aware energy conservation guidelines."""
+    """Returns energy conservation guidelines based on load thresholds."""
     return {
         "type": "Deterministic Rule-Based Tips",
         "tips": [
@@ -358,11 +376,13 @@ async def get_recommendations():
 
 @app.get("/api/alerts")
 async def get_alerts():
+    """Returns in-memory list of recent high-power alert events."""
     return {"alerts": recent_alerts, "total_count": len(recent_alerts)}
 
 
 @app.post("/api/settings")
 async def update_settings(payload: Dict[str, Any]):
+    """Updates electricity tariff and alert threshold dynamically."""
     global TARIFF_INR, ALERT_THRESHOLD_KW
     if "tariff" in payload:
         TARIFF_INR = float(payload["tariff"])
@@ -371,13 +391,14 @@ async def update_settings(payload: Dict[str, Any]):
     return {"status": "success", "tariff": TARIFF_INR, "threshold": ALERT_THRESHOLD_KW}
 
 
-# Mount Static Files
+# Mount static assets (CSS, JS)
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/")
 async def root():
+    """Serves the single-page application index.html."""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         with open(index_file, "r", encoding="utf-8") as f:
